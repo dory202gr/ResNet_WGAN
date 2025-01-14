@@ -135,26 +135,50 @@ def calc_lr(epoch, i):
     return learning_rate - ((epoch * iteration_per_epoch + i) / 10000) * learning_rate
 
 
-def train_model(generator, descriminator, n_epochs, n_descriminator, dataloader):
+def gradient_penalty(discriminator, real_data, fake_data):
+    if real_data.shape != fake_data.shape:
+        return 0
+    batch_size = real_data.size(0)
+    epsilon = torch.rand(batch_size, 1, 1, 1).to(device)
+    interpolates = epsilon * real_data + (1 - epsilon) * fake_data
+    interpolates.requires_grad_(True)
+
+    d_interpolates = discriminator(interpolates)
+    grad_outputs = torch.ones(d_interpolates.size()).to(device)
+
+    gradients = torch.autograd.grad(
+        outputs=d_interpolates,
+        inputs=interpolates,
+        grad_outputs=grad_outputs,
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True
+    )[0]
+
+    gradients = gradients.view(gradients.size(0), -1)
+    gradient_penalty_val = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+    return gradient_penalty_val
+
+
+def train_model():
     for epoch in range(n_epochs):
         for i, (real_imgs, _) in tqdm(enumerate(dataloader), desc="Training Progress",
                                       unit=f"/{iteration_per_epoch} batches"):
-            optimizer_G = torch.optim.Adam(generator.parameters(), lr=calc_lr(epoch, i))
-            optimizer_D = torch.optim.Adam(descriminator.parameters(), lr=calc_lr(epoch, i))
+            optimizer_G = torch.optim.Adam(generator.parameters(), lr=calc_lr(epoch, i), betas=(0.5, 0.9))
+            optimizer_D = torch.optim.Adam(descriminator.parameters(), lr=calc_lr(epoch, i), betas=(0.5, 0.9))
             real_imgs = real_imgs.to(device)
 
             for j in range(n_descriminator):
                 z = torch.normal(mean=mu, std=sigma, size=(batch_size, latent_dim)).to(device)
                 fake_imgs = generator(z).to(device)
+                gp = gradient_penalty(descriminator, real_imgs, fake_imgs)
 
                 descriminator_loss = -torch.mean(descriminator(real_imgs)) + torch.mean(
-                    descriminator(fake_imgs.to(device)))
+                    descriminator(fake_imgs.to(device))) + 10 * gp
                 optimizer_D.zero_grad()
                 descriminator_loss.backward()
                 optimizer_D.step()
 
-                for p in descriminator.parameters():
-                    p.data.clamp_(-0.01, 0.01)
 
             z = torch.normal(mean=mu, std=sigma, size=(batch_size, latent_dim)).to(device)
             fake_imgs = generator(z).to(device)
@@ -167,4 +191,20 @@ def train_model(generator, descriminator, n_epochs, n_descriminator, dataloader)
         print(
             f"Epoch [{epoch + 1}/{n_epochs}] - Descriminator Loss: {descriminator_loss.item():.4f}, Generator Loss: {generator_loss.item():.4f}")
 
-train_model(generator, descriminator, n_epochs, n_descriminator, dataloader)
+train_model()
+
+z = torch.normal(mean=mu, std=sigma, size=(1, latent_dim)).to(device)
+img = generator(z)
+image = img.squeeze(0).squeeze(0).detach().cpu()
+
+print(image.shape)
+
+# Convert to NumPy array for matplotlib
+image_np = image.numpy()
+
+# Plot the image
+plt.imshow(image_np, cmap='gray')
+plt.colorbar()  # Optional: display a color bar
+plt.title("Greyscale Image")
+plt.axis('off')  # Optional: turn off axes
+plt.show()
